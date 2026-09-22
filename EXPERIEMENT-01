@@ -1,50 +1,167 @@
-# Integrated Ethical Hacking Assessment Report
+# EXPERIMENT 01: SQL INJECTION DETECTION AND PREVENTION
 
-**Assessment Engagement Identifier:** `ASSIGNMENT-02-ETHICAL-HACKING`  
-**Target Perimeter:** Localhost Authorized Lab Perimeter (`127.0.0.1`)  
-**Standard Compliance:** PTES, NIST SP 800-115, OWASP Top 10:2021  
-**Lead Penetration Tester:** Student Researcher (`2311CS040082-EH`)  
-
----
-
-## 1. Executive Summary
-During the comprehensive penetration testing engagement, the testing team executed an end-to-end evaluation covering reconnaissance, automated and manual port scanning, web application enumeration, vulnerability correlation, controlled exploitation, remediation implementation, and post-patch retesting.
-
-The initial assessment revealed **1 Critical**, **4 High**, and **3 Medium** severity vulnerabilities. The primary exposure stems from unauthenticated SQL injection vectors, missing web application security headers, and unrestricted endpoint access. Following the delivery and application of defensive patches, 100% of exploitable conditions were successfully verified as remediated.
+**Course:** Ethical Hacking & Web Application Security Lab  
+**Student Roll No:** `2311CS040082`  
+**Lab Assignment Code:** `ASSIGNMENT-01-SQLI`  
+**Date:** September 22, 2026  
+**Target Environment:** Local Authorized Sandbox (`security_lab.db` / Python WSGI)  
 
 ---
 
-## 2. Assessment Methodology & Phase Progression
+## 1. AIM & OBJECTIVES
+- **Aim:** To detect, analyze, exploit, and remediate SQL Injection (SQLi) vulnerabilities in an unhardened web application environment and mathematically verify the security posture post-remediation.
+- **Objectives:**
+  1. Understand the mechanics of SQL Injection (CWE-89 / OWASP A03:2021).
+  2. Perform controlled exploitation across three attack surfaces: Authentication Bypass, UNION-based data extraction, and Numeric parameter injection.
+  3. Analyze the vulnerable database query construction and demonstrate root-cause security flaws.
+  4. Implement industry-standard defensive controls: Parameterized Queries (Prepared Statements), Strict Regular Expression Input Validation, and Error Masking.
+  5. Conduct automated regression retesting to verify 100% vulnerability mitigation.
 
-```text
-[Reconnaissance] -> [Port Scanning] -> [Web Enumeration] -> [Vuln Analysis] -> [Controlled Exploitation] -> [Remediation & Retesting]
+---
+
+## 2. PREREQUISITES & LAB SETUP
+- **Operating System:** Windows 10/11 / Linux / macOS
+- **Runtime & Tools:** Python 3.10+, SQLite3, cURL / Postman / Burp Suite
+- **Database Schema:** 4 tables (`users`, `accounts`, `products`, `system_audit_logs`) seeded via `setup_db.py`.
+
+### Database Initialization Command:
+```bash
+python assignment-01-sqli/lab/setup_db.py
 ```
 
-### Phase Summaries
-- **Reconnaissance**: Identified target IP `127.0.0.1`, operating on Python/Werkzeug application runtime.
-- **Port Scanning**: Identified active ports 5000 (SecOps Dashboard), 5001 (Target REST API), and optional container port 8080 (DVWA).
-- **Web Enumeration**: Fuzzed 16 common routes; discovered sensitive endpoints `/api/vulnerable/login`, `/api/vulnerable/search`, and `/api/vulnerable/user/1`.
-- **Vulnerability Analysis**: Triaged scanner outputs against manual verification to filter 4 false positives and catalog 8 valid vulnerabilities (`VULN-001` through `VULN-008`).
-- **Controlled Exploitation**: Successfully demonstrated authentication bypass and database table extraction using non-destructive PoC scripts.
-- **Remediation & Hardening**: Engineered parameterized queries, input validators, and an HTTP security header middleware.
-- **Retesting**: Automated regression tests verified complete neutralization of all attack vectors.
+---
+
+## 3. THEORETICAL CONCEPTS & VULNERABILITY MECHANICS
+
+### A. Vulnerable Architecture (CWE-89)
+In insecure applications, dynamic SQL statements are constructed by concatenating unsanitized user inputs directly into the SQL interpreter string:
+$$\text{User Input} \longrightarrow \text{Direct String Interpolation} \longrightarrow \text{Database Query Interpreter}$$
+When untrusted characters (such as `'`, `--`, `OR`, `UNION`) are supplied, the database compiler misinterprets user data as SQL control commands, altering query logic.
+
+### B. Secure Architecture (Remediated)
+In hardened applications, data is strictly separated from query instructions:
+$$\text{User Input} \longrightarrow \text{Regex / Type Validation} \longrightarrow \text{Prepared Statement Binding (?)} \longrightarrow \text{Database}$$
+Parameterized queries pre-compile the SQL statement structure. User parameters are transmitted separately as literal byte values, making SQL syntax alteration mathematically impossible.
 
 ---
 
-## 3. Discovered Vulnerability Ledger
+## 4. STEP-BY-STEP EXPLOITATION & EVIDENCE
 
-| ID | Finding Title | Severity | CVSS v3.1 | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| `VULN-001` | SQL Injection in Authentication Service | **CRITICAL** | 9.8 | **REMEDIATED** |
-| `VULN-002` | UNION-Based Data Extraction in Search | **HIGH** | 8.6 | **REMEDIATED** |
-| `VULN-003` | Numeric SQL Injection in User Service | **HIGH** | 7.5 | **REMEDIATED** |
-| `VULN-004` | Missing HTTP Security Headers | **MEDIUM** | 6.5 | **REMEDIATED** |
-| `VULN-005` | Verbose Server Software Banner Disclosure | **MEDIUM** | 5.3 | **REMEDIATED** |
-| `VULN-006` | Unauthenticated Administrative Route Exposure | **HIGH** | 8.2 | **REMEDIATED** |
-| `VULN-007` | Insecure Direct Object Reference (IDOR) | **HIGH** | 7.5 | **REMEDIATED** |
-| `VULN-008` | Legacy Cryptographic Hash Usage | **MEDIUM** | 5.9 | **REMEDIATED** |
+### Test Case 1: Authentication Bypass (Tautology & Comment Truncation)
+- **Target Endpoint:** `POST /api/vulnerable/login`
+- **Objective:** Log into the administrator account without knowing the valid password.
+- **Payload:** `admin' OR '1'='1' --`
+- **Vulnerable Query:**
+  ```sql
+  SELECT * FROM users WHERE username = 'admin' OR '1'='1' --' AND password_hash = '...'
+  ```
+- **Execution Mechanism:**
+  1. The `'1'='1'` boolean condition evaluates to `TRUE` for every record.
+  2. The `--` SQL comment delimiter strips the subsequent password verification clause.
+  3. The database returns the first record in the table (`username: admin`).
+- **Response Evidence:**
+  ```json
+  {
+    "authenticated": true,
+    "status": "success",
+    "user": { "id": 1, "username": "admin", "role": "admin" }
+  }
+  ```
 
 ---
 
-## 4. Retest & Verification Sign-Off
-All 8 findings have undergone automated verification in Phase 7 (`retest_all.py`), confirming that security controls are effective and resilient against known attack vectors.
+### Test Case 2: UNION-Based Confidential Data Theft
+- **Target Endpoint:** `GET /api/vulnerable/search?q=`
+- **Objective:** Extract private financial account balances and SSN fragments via an unauthenticated public product search route.
+- **Payload:** `' UNION SELECT 99, account_number, account_type, balance, 1, ssn_last4, 0 FROM accounts --`
+- **Vulnerable Query:**
+  ```sql
+  SELECT id, name, category, price, stock, description, is_hidden 
+  FROM products 
+  WHERE name LIKE '%' UNION SELECT 99, account_number, account_type, balance, 1, ssn_last4, 0 FROM accounts --%'
+  ```
+- **Response Evidence:**
+  ```json
+  {
+    "data": [
+      { "id": 99, "name": "ACC-9001-ADMIN", "category": "Executive Reserve", "price": 500000.0, "description": "9821" },
+      { "id": 99, "name": "ACC-8002-JDOE", "category": "Payroll Account", "price": 8450.75, "description": "4412" }
+    ],
+    "results_count": 4,
+    "status": "success"
+  }
+  ```
+
+---
+
+### Test Case 3: Numeric SQL Injection & IDOR User Enumeration
+- **Target Endpoint:** `GET /api/vulnerable/user/1 OR 1=1`
+- **Objective:** Dump all user records by bypassing numeric ID clauses without quotes.
+- **Payload:** `1 OR 1=1`
+- **Vulnerable Query:**
+  ```sql
+  SELECT id, username, email, role, bio FROM users WHERE id = 1 OR 1=1
+  ```
+- **Response Evidence:** Returned all 4 user accounts in a single request.
+
+---
+
+## 5. CODE-LEVEL REMEDIATION
+
+### Comparison: Insecure vs. Hardened Implementation
+
+```python
+# ==============================================================================
+# 1. INSECURE VULNERABLE CODE (assignment-01-sqli/vulnerable/vuln_queries.py)
+# ==============================================================================
+def vulnerable_login(username_input, password_input):
+    pw_hash = hashlib.sha256(password_input.encode()).hexdigest()
+    # DANGEROUS STRING INTERPOLATION:
+    raw_query = f"SELECT * FROM users WHERE username = '{username_input}' AND password_hash = '{pw_hash}'"
+    cursor.execute(raw_query)
+    return cursor.fetchone()
+
+# ==============================================================================
+# 2. HARDENED REMEDIATED CODE (assignment-01-sqli/secure/secure_queries.py)
+# ==============================================================================
+def secure_login(username_input, password_input):
+    # Defense Layer 1: Strict Regex Input Whitelisting
+    if not re.match(r"^[a-zA-Z0-9_\-]{3,30}$", username_input):
+        return {"status": "validation_error", "error": "Illegal username format"}
+
+    pw_hash = hashlib.sha256(password_input.encode()).hexdigest()
+    
+    # Defense Layer 2: Parameterized Prepared Statement Placeholder
+    parameterized_query = "SELECT id, username, email, role FROM users WHERE username = ? AND password_hash = ?"
+    cursor.execute(parameterized_query, (username_input, pw_hash))
+    return cursor.fetchone()
+```
+
+---
+
+## 6. AUTOMATED VERIFICATION RESULTS
+
+Running the regression suite proves 100% defense effectiveness:
+
+```bash
+python assignment-01-sqli/tests/test_sqli_secure.py
+```
+
+```text
+[+] Legitimate Access Verified: Valid credentials authenticated successfully.
+[+] Remediation Verified: Auth bypass attempt blocked: admin' OR '1'='1' --
+[+] Remediation Verified: Comment truncation blocked: admin' --
+[+] Remediation Verified: UNION payload treated as literal string; 0 data leaked.
+[+] Remediation Verified: Numeric injection blocked by type checking: 1 OR 1=1
+[+] Remediation Verified: Database errors masked; safe error returned.
+
+Ran 6 tests in 0.016s — OK (100% Mitigation Verified)
+```
+
+---
+
+## 7. CONCLUSION & KEY TAKEAWAYS
+1. Dynamic SQL string formatting is inherently hazardous and must never be used.
+2. Parameterized queries (Prepared Statements) provide mathematically complete defense against SQL injection.
+3. Input validation acts as an essential secondary defense layer (defense-in-depth).
+4. All vulnerabilities identified in Assignment 1 were successfully remediated and verified through automated test suites.
